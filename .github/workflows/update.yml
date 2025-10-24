@@ -2,7 +2,7 @@ name: Update public_price_stock (CSV/JSON)
 
 on:
   schedule:
-    - cron: "0 */12 * * *"  # runs every 12h, self-gated to ~72h
+    - cron: "0 0 */3 * *"   # every 3 days
   workflow_dispatch: {}      # allow manual trigger
 
 permissions:
