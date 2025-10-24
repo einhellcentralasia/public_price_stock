@@ -2,12 +2,13 @@
 # -*- coding: utf-8 -*-
 
 """
-public_price_stock — SharePoint Table -> XML
+public_price_stock — SharePoint Table -> CSV/JSON
 - Reads ALL columns from SharePoint Excel table (env: SP_TABLE_NAME).
 - Replaces column "Stock" (any case) with STRING buckets: 0, <10, <50, >50.
-- Adds per-row <updatedAt> with format dd.mm.yyyy hh:mm (UTC+05:00).
-- Writes UTF-8 XML to docs/public_price_stock.xml:
-    <items><item><ColA>...</ColA>...<updatedAt>...</updatedAt></item>...</items>
+- Adds per-row updatedAt with format dd.mm.yyyy hh:mm (UTC+05:00).
+- Writes:
+    docs/public_price_stock.csv
+    docs/public_price_stock.json
 """
 
 import os
@@ -18,7 +19,6 @@ from urllib.parse import quote, unquote
 
 import pandas as pd
 import requests
-from lxml import etree
 import msal
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -33,10 +33,10 @@ def env(name: str) -> str:
 TENANT_ID        = env("TENANT_ID")
 CLIENT_ID        = env("CLIENT_ID")
 CLIENT_SECRET    = env("CLIENT_SECRET")
-SP_SITE_HOSTNAME = env("SP_SITE_HOSTNAME")
-SP_SITE_PATH     = env("SP_SITE_PATH")
-SP_XLSX_PATH     = env("SP_XLSX_PATH")
-SP_TABLE_NAME    = env("SP_TABLE_NAME")
+SP_SITE_HOSTNAME = env("SP_SITE_HOSTNAME")   # e.g. bavatools.sharepoint.com
+SP_SITE_PATH     = env("SP_SITE_PATH")       # e.g. /sites/Einhell_common
+SP_XLSX_PATH     = env("SP_XLSX_PATH")       # e.g. /Shared Documents/.../Bava_data.xlsx
+SP_TABLE_NAME    = env("SP_TABLE_NAME")      # e.g. _public_price_table
 
 GRAPH_BASE  = "https://graph.microsoft.com/v1.0"
 GRAPH_SCOPE = ["https://graph.microsoft.com/.default"]
@@ -172,16 +172,7 @@ def to_bucket(stock_raw: str) -> str:
     if n < 50:  return "<50"
     return ">50"
 
-def sanitize_tag(name: str) -> str:
-    """XML-safe tag names while keeping PQ-friendly names."""
-    import re
-    s = str(name).strip()
-    s = re.sub(r"[^A-Za-z0-9._-]+", "_", s)
-    if not s or not s[0].isalpha():
-        s = f"col_{s}"
-    return s
-
-def build_xml(df: pd.DataFrame, ts_str: str) -> bytes:
+def apply_business_rules(df: pd.DataFrame, ts_str: str) -> pd.DataFrame:
     # Replace "Stock" with bucketed strings (case-insensitive)
     lower_map = {c.lower(): c for c in df.columns}
     if "stock" in lower_map:
@@ -190,18 +181,9 @@ def build_xml(df: pd.DataFrame, ts_str: str) -> bytes:
     else:
         logging.warning("Column 'Stock' not found; skipping bucketing")
 
-    # Add/overwrite per-row timestamp
+    # Add/overwrite per-row timestamp column (replicated for each row)
     df["updatedAt"] = ts_str
-
-    root = etree.Element("items")
-    for _, row in df.iterrows():
-        item = etree.SubElement(root, "item")
-        for col in df.columns:
-            tag = sanitize_tag(col)
-            val = "" if pd.isna(row[col]) else str(row[col])
-            etree.SubElement(item, tag).text = val
-
-    return etree.tostring(root, xml_declaration=True, encoding="UTF-8", pretty_print=True)
+    return df
 
 def main() -> int:
     try:
@@ -211,14 +193,22 @@ def main() -> int:
         df      = read_table(site_id, item_id, token)
 
         ts = datetime.now(UTC_PLUS_5).strftime("%d.%m.%Y %H:%M")
-        xml_bytes = build_xml(df, ts)
+        df = apply_business_rules(df, ts)
 
-        out_path = "docs/public_price_stock.xml"
-        os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        with open(out_path, "wb") as f:
-            f.write(xml_bytes)
+        # Write outputs (flat)
+        out_dir = "docs"
+        os.makedirs(out_dir, exist_ok=True)
 
-        logging.info(f"SUCCESS: wrote {out_path} with {len(df)} rows")
+        csv_path = os.path.join(out_dir, "public_price_stock.csv")
+        json_path = os.path.join(out_dir, "public_price_stock.json")
+
+        # CSV (BOM helps Excel), no index
+        df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+
+        # JSON array of records, keep Unicode
+        df.to_json(json_path, orient="records", force_ascii=False)
+
+        logging.info(f"SUCCESS: wrote {csv_path} and {json_path} with {len(df)} rows")
         return 0
     except Exception:
         logging.exception("Run failed")
