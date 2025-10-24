@@ -4,18 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       force_run:
-        description: "Bypass 72h gate and run now"
+        description: 'Bypass 72h gate and run now'
+        required: false
         type: boolean
         default: false
   schedule:
-    - cron: "0 */12 * * *"         # checks every 12h; gate enforces ~72h
+    - cron: '0 */12 * * *'   # check every 12h; gate enforces ~72h
   push:
     branches: [ main ]
     paths:
-      - "main.py"
-      - "requirements.txt"
-      - ".github/workflows/update.yml"
-      - "docs/**"
+      - 'main.py'
+      - 'requirements.txt'
+      - '.github/workflows/update.yml'
+      - 'docs/**'
 
 permissions:
   contents: write
@@ -39,6 +40,7 @@ jobs:
       SP_SITE_PATH:     ${{ secrets.SP_SITE_PATH }}
       SP_XLSX_PATH:     ${{ secrets.SP_XLSX_PATH }}
       SP_TABLE_NAME:    ${{ secrets.SP_TABLE_NAME }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -50,32 +52,32 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          FORCE="${{ github.event.inputs.force_run || 'false' }}"
           FILE="docs/public_price_stock.xml"
+          FORCE="${{ github.event.inputs.force_run }}"
           if [ "$FORCE" = "true" ]; then
-            echo "run=true" >> $GITHUB_OUTPUT
+            echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ ! -f "$FILE" ]; then
-            echo "run=true" >> $GITHUB_OUTPUT
+            echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          LAST_TS=$(git log -1 --format=%ct -- "$FILE" || echo 0)
-          NOW_TS=$(date +%s)
+          LAST_TS="$(git log -1 --format=%ct -- "$FILE" || echo 0)"
+          NOW_TS="$(date +%s)"
           ELAPSED=$(( NOW_TS - LAST_TS ))
-          echo "Last update: $ELAPSED seconds ago"
-          # 72h ~= 259200; allow ~1h slack (255600)
+          echo "Last update (sec): $ELAPSED"
+          # 72h = 259200; allow ~1h slack → 255600
           if [ "$ELAPSED" -ge 255600 ]; then
-            echo "run=true" >> $GITHUB_OUTPUT
+            echo "run=true" >> "$GITHUB_OUTPUT"
           else
-            echo "run=false" >> $GITHUB_OUTPUT
+            echo "run=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Setup Python
         if: steps.gate.outputs.run == 'true'
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
       - name: Install deps
         if: steps.gate.outputs.run == 'true'
