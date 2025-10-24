@@ -1,0 +1,50 @@
+name: Update XML from SharePoint
+
+on:
+  schedule:
+    - cron: '0 */72 * * *'  # every ~72h
+  workflow_dispatch:
+
+jobs:
+  update-feed:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run XML generator
+        env:
+          TENANT_ID: ${{ secrets.TENANT_ID }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+          SP_SITE_HOSTNAME: ${{ secrets.SP_SITE_HOSTNAME }}
+          SP_SITE_PATH: ${{ secrets.SP_SITE_PATH }}
+          SP_XLSX_PATH: ${{ secrets.SP_XLSX_PATH }}
+          SP_TABLE_NAME: ${{ secrets.SP_TABLE_NAME }}
+        run: python main.py
+
+      - name: Commit XML output
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add docs/public_price_stock.xml || true
+          git commit -m "Auto-update XML [skip ci]" || echo "No changes to commit"
+          git push
+
+      - name: Publish to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          projectName: ${{ secrets.CF_PROJECT_NAME }}
+          directory: docs
