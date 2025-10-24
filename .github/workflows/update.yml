@@ -2,7 +2,7 @@ name: Update public_price_stock (CSV/JSON)
 
 on:
   schedule:
-    - cron: "0 0 */3 * *"   # every 3 days
+    - cron: "0 0 */3 * *"   # every 3 days at 00:00 UTC (~72h)
   workflow_dispatch: {}      # allow manual trigger
 
 permissions:
@@ -30,22 +30,31 @@ jobs:
         with:
           fetch-depth: 0
 
-      # gate: only update every ~72h
-      - name: Gate (skip if last update <72h)
+      # Gate: run only if >= ~72h since last update, BUT always allow manual runs
+      - name: Gate (skip if last update <72h unless manual)
         id: gate
         run: |
           set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual run — bypassing time gate."
+            echo "run=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
           FILE="docs/public_price_stock.csv"
           if [ ! -f "$FILE" ]; then
+            echo "No prior output — running."
             echo "run=true" >> $GITHUB_OUTPUT
             exit 0
           fi
           LAST_TS=$(git log -1 --format=%ct -- "$FILE" || echo 0)
           NOW_TS=$(date +%s)
           ELAPSED=$((NOW_TS - LAST_TS))
-          if [ "$ELAPSED" -ge 255600 ]; then  # 71h
+          # 72h = 259200; give 1h slack -> 71h = 255600
+          if [ "$ELAPSED" -ge 255600 ]; then
+            echo ">=71h since last update — running."
             echo "run=true" >> $GITHUB_OUTPUT
           else
+            echo "<71h since last update — skipping."
             echo "run=false" >> $GITHUB_OUTPUT
           fi
 
@@ -59,7 +68,12 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         run: |
           python -m pip install --upgrade pip
-          pip install pandas requests msal
+          # Use requirements.txt if you keep it in repo (recommended)
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install pandas requests msal
+          fi
 
       - name: Generate CSV + JSON
         if: steps.gate.outputs.run == 'true'
@@ -69,16 +83,16 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         run: |
           set -e
-          if [[ -n "$(git status --porcelain docs/public_price_stock.csv docs/public_price_stock.json)" ]]; then
-            git config user.name  "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add docs/public_price_stock.csv docs/public_price_stock.json
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/public_price_stock.csv docs/public_price_stock.json
+          if git diff --staged --quiet; then
+            echo "No content changes to commit."
+          else
             git commit -m "Update public_price_stock data"
             git push
-          else
-            echo "No content changes to commit."
           fi
 
       - name: Skipped (within 72h)
         if: steps.gate.outputs.run != 'true'
-        run: echo "⏭️ Skipped — last update was <72h ago."
+        run: echo "⏭️ Skipped — last update was <72h ago (automatic schedule)."
