@@ -8,10 +8,6 @@ public_price_stock — SharePoint Table -> XML
 - Adds per-row <updatedAt> with format dd.mm.yyyy hh:mm (UTC+05:00).
 - Writes UTF-8 XML to docs/public_price_stock.xml:
     <items><item><ColA>...</ColA>...<updatedAt>...</updatedAt></item>...</items>
-
-Env (set as repo secrets):
-  TENANT_ID, CLIENT_ID, CLIENT_SECRET
-  SP_SITE_HOSTNAME, SP_SITE_PATH, SP_XLSX_PATH, SP_TABLE_NAME
 """
 
 import os
@@ -37,16 +33,15 @@ def env(name: str) -> str:
 TENANT_ID        = env("TENANT_ID")
 CLIENT_ID        = env("CLIENT_ID")
 CLIENT_SECRET    = env("CLIENT_SECRET")
-SP_SITE_HOSTNAME = env("SP_SITE_HOSTNAME")   # e.g. bavatools.sharepoint.com
-SP_SITE_PATH     = env("SP_SITE_PATH")       # e.g. /sites/Einhell_common
-SP_XLSX_PATH     = env("SP_XLSX_PATH")       # e.g. /Shared Documents/.../Bava_data.xlsx
-SP_TABLE_NAME    = env("SP_TABLE_NAME")      # _public_price_table
+SP_SITE_HOSTNAME = env("SP_SITE_HOSTNAME")
+SP_SITE_PATH     = env("SP_SITE_PATH")
+SP_XLSX_PATH     = env("SP_XLSX_PATH")
+SP_TABLE_NAME    = env("SP_TABLE_NAME")
 
 GRAPH_BASE  = "https://graph.microsoft.com/v1.0"
 GRAPH_SCOPE = ["https://graph.microsoft.com/.default"]
 SAFE_PATH   = "/:+()%!$&',;=@"
 
-# +05:00 (your required local time)
 UTC_PLUS_5 = timezone(timedelta(hours=5))
 
 # ---------- GRAPH HELPERS ----------
@@ -85,7 +80,7 @@ def search_item(site_id: str, filename: str, token: str):
     return gget(url, token).get("value", [])
 
 def resolve_item_id(site_id: str, token: str) -> str:
-    # 1) direct path with common alternates
+    # try direct known variants first
     candidates = {
         SP_XLSX_PATH,
         SP_XLSX_PATH.replace("/Shared Documents", "/Documents"),
@@ -99,7 +94,7 @@ def resolve_item_id(site_id: str, token: str) -> str:
             logging.info(f"Resolved workbook by path: {p}")
             return r.json()["id"]
 
-    # 2) search by name; match parent path suffix
+    # fallback: search by filename and match folder tail
     filename = os.path.basename(unquote(SP_XLSX_PATH))
     parent_dir = os.path.dirname(unquote(SP_XLSX_PATH)).replace("\\", "/")
     variants = {
@@ -117,23 +112,58 @@ def resolve_item_id(site_id: str, token: str) -> str:
 
     raise RuntimeError("Excel workbook not found via Graph.")
 
+# ---------- UTIL ----------
+def make_unique(names) -> list:
+    """Ensure column names are unique: 'Name', 'Name__2', 'Name__3', ..."""
+    out, seen = [], {}
+    for n in names:
+        base = str(n).strip() if n is not None else ""
+        if base == "":
+            base = "col"
+        if base not in seen:
+            seen[base] = 1
+            out.append(base)
+        else:
+            seen[base] += 1
+            out.append(f"{base}__{seen[base]}")
+    return out
+
+def clean_cell(x) -> str:
+    if pd.isna(x) or x is None:
+        return ""
+    try:
+        return str(x).strip()
+    except Exception:
+        return str(x)
+
 # ---------- DATA ----------
 def read_table(site_id: str, item_id: str, token: str) -> pd.DataFrame:
     base = f"{GRAPH_BASE}/sites/{site_id}/drive/items/{item_id}/workbook/tables/{quote(SP_TABLE_NAME, safe='')}"
     hdr_values = gget(f"{base}/headerRowRange", token).get("values", [[]])
     headers = [str(h).strip() for h in (hdr_values[0] if hdr_values else [])]
-    body = gget(f"{base}/dataBodyRange", token).get("values", []) or []
-    df = pd.DataFrame(body, columns=headers)
 
-    # normalize everything to string
+    body = gget(f"{base}/dataBodyRange", token).get("values", []) or []
+    df = pd.DataFrame(body)
+
+    # assign headers if present, else generate default col names
+    if headers and len(headers) == df.shape[1]:
+        df.columns = headers
+    else:
+        df.columns = [f"col{i+1}" for i in range(df.shape[1])]
+
+    # make column names unique to avoid df['dup'] returning a DataFrame
+    df.columns = make_unique(df.columns)
+
+    # normalize every cell to a clean string
     for c in df.columns:
-        df[c] = df[c].astype(str).str.strip()
+        df[c] = df[c].map(clean_cell)
+
     return df
 
 def to_bucket(stock_raw: str) -> str:
     """ Map any stock text to: 0, <10, <50, >50 (strings). """
     try:
-        val = stock_raw.replace(",", ".").strip()
+        val = (stock_raw or "").replace(",", ".").strip()
         n = int(float(val)) if val not in ("", "None", "nan") else 0
     except Exception:
         n = 0
@@ -145,7 +175,7 @@ def to_bucket(stock_raw: str) -> str:
 def sanitize_tag(name: str) -> str:
     """XML-safe tag names while keeping PQ-friendly names."""
     import re
-    s = name.strip()
+    s = str(name).strip()
     s = re.sub(r"[^A-Za-z0-9._-]+", "_", s)
     if not s or not s[0].isalpha():
         s = f"col_{s}"
@@ -156,7 +186,7 @@ def build_xml(df: pd.DataFrame, ts_str: str) -> bytes:
     lower_map = {c.lower(): c for c in df.columns}
     if "stock" in lower_map:
         stock_col = lower_map["stock"]
-        df[stock_col] = df[stock_col].apply(to_bucket)
+        df[stock_col] = df[stock_col].map(to_bucket)
     else:
         logging.warning("Column 'Stock' not found; skipping bucketing")
 
