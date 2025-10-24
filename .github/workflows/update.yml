@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       force_run:
-        description: 'Bypass 72h gate and run now'
+        description: Bypass 72h gate and run now
         required: false
         type: boolean
         default: false
@@ -114,4 +114,4 @@ jobs:
 
       - name: Skipped (gate)
         if: steps.gate.outputs.run != 'true'
-        run: echo "⏭️ Skipped: last publish was <72h ago."
+        run: echo "Skipped: last publish was <72h ago."
