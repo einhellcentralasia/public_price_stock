@@ -1,9 +1,7 @@
 # public_price_stock
 
 - Source: SharePoint Excel table `_public_price_table`
-- Output: `docs/public_price_stock.xml` (all columns; `Stock` bucketed; `updatedAt` added `dd.mm.yyyy hh:mm`)
-- Deployed to Cloudflare Pages: `public-price-stock.pages.dev` (project `public_price_stock`)
-- Schedule: every ~12h with 72h gate (saves CI minutes)
+Latest data: [public_price_stock.csv](https://raw.githubusercontent.com/einhellcentralasia/public_price_stock/main/docs/public_price_stock.csv)
 
 ## Local dev
 ```bash
